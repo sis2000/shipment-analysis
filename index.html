@@ -62,6 +62,8 @@
       // 解析日期並分出「每週」的資訊
       const getWeekInfo = (dateStr) => {
         const d = new Date(dateStr);
+        d.setHours(0, 0, 0, 0); // 消除時間差異
+
         // 設定為該週週一
         const dayNum = d.getDay() || 7;
         d.setDate(d.getDate() - (dayNum - 1)); 
@@ -71,16 +73,16 @@
         end.setDate(d.getDate() + 6); // 該週週日
         
         const firstDayOfYear = new Date(d.getFullYear(), 0, 1);
-        const pastDaysOfYear = (d - firstDayOfYear) / 86400000;
+        const pastDaysOfYear = Math.round((d - firstDayOfYear) / 86400000); // 確保整數天數
         const weekNum = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
         const formatDate = (date) => `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
         
         const wStr = weekNum.toString().padStart(2, '0');
         return {
-          key: `${d.getFullYear()}-W${wStr}`,
-          label: `W${wStr}`,
-          range: `${formatDate(start)} - ${formatDate(end)}`,
-          sortKey: d.getTime()
+          weekKey: `${d.getFullYear()}-W${wStr}`, // <--- 修復點：明確使用 weekKey 命名
+          weekLabel: `W${wStr}`,
+          weekRange: `${formatDate(start)} - ${formatDate(end)}`,
+          weekSortKey: d.getTime()
         };
       };
 
@@ -132,7 +134,7 @@
             brand: cols[idxBrand]?.replace(/"/g, '') || 'Unknown',
             style: cols[idxStyle]?.replace(/"/g, '') || 'Unknown',
             qty: qty,
-            ...getWeekInfo(dateStr)
+            ...getWeekInfo(dateStr) // <--- 解構後，會正確對應到 weekKey
           });
         });
         setData(result);
