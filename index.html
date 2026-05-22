@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>出貨與產能分析儀表板 - 每週視角</title>
+  <title>出貨與產能分析儀表板 - 彈性視角</title>
   
   <!-- 載入 React 核心 (固定穩定版本 18.2.0) -->
   <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
@@ -43,47 +43,67 @@
 
     // --- 主程式開始 ---
     const App = () => {
-      const [data, setData] = useState([]);
+      // 改為儲存原始資料，以便隨時切換時間維度重新計算
+      const [rawCsvData, setRawCsvData] = useState([]);
       const [loading, setLoading] = useState(false);
       const [expandedBrands, setExpandedBrands] = useState(new Set());
       
+      // 時間維度模式：'week' 或 'month'
+      const [timeMode, setTimeMode] = useState('week');
+
+      // 產能計算參數
       const [pairsPerHour, setPairsPerHour] = useState(150);
       const [lineCount, setLineCount] = useState(4);
       const [hoursPerDay, setHoursPerDay] = useState(10);
       const [daysPerWeek, setDaysPerWeek] = useState(6);
+      const [daysPerMonth, setDaysPerMonth] = useState(26);
       
-      const capacity = useMemo(() => pairsPerHour * lineCount * hoursPerDay * daysPerWeek, [pairsPerHour, lineCount, hoursPerDay, daysPerWeek]);
+      // 總產能 (依據當前模式自動切換乘數)
+      const capacity = useMemo(() => {
+        const days = timeMode === 'week' ? daysPerWeek : daysPerMonth;
+        return pairsPerHour * lineCount * hoursPerDay * days;
+      }, [pairsPerHour, lineCount, hoursPerDay, daysPerWeek, daysPerMonth, timeMode]);
 
       const handleCapacityChange = (newTotal) => {
-        const divider = lineCount * hoursPerDay * daysPerWeek;
+        const days = timeMode === 'week' ? daysPerWeek : daysPerMonth;
+        const divider = lineCount * hoursPerDay * days;
         if (divider > 0) setPairsPerHour(Math.round(newTotal / divider));
       };
 
-      // 解析日期並分出「每週」的資訊
-      const getWeekInfo = (dateStr) => {
+      // 核心函數：解析日期並根據模式產生 Period Info
+      const getTimeInfo = (dateStr, mode) => {
         const d = new Date(dateStr);
-        d.setHours(0, 0, 0, 0); // 消除時間差異
+        d.setHours(0, 0, 0, 0);
 
-        // 設定為該週週一
-        const dayNum = d.getDay() || 7;
-        d.setDate(d.getDate() - (dayNum - 1)); 
-        
-        const start = new Date(d);
-        const end = new Date(d);
-        end.setDate(d.getDate() + 6); // 該週週日
-        
-        const firstDayOfYear = new Date(d.getFullYear(), 0, 1);
-        const pastDaysOfYear = Math.round((d - firstDayOfYear) / 86400000); // 確保整數天數
-        const weekNum = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
-        const formatDate = (date) => `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-        
-        const wStr = weekNum.toString().padStart(2, '0');
-        return {
-          weekKey: `${d.getFullYear()}-W${wStr}`, // <--- 修復點：明確使用 weekKey 命名
-          weekLabel: `W${wStr}`,
-          weekRange: `${formatDate(start)} - ${formatDate(end)}`,
-          weekSortKey: d.getTime()
-        };
+        if (mode === 'week') {
+          const dayNum = d.getDay() || 7;
+          d.setDate(d.getDate() - (dayNum - 1)); 
+          const start = new Date(d);
+          const end = new Date(d);
+          end.setDate(d.getDate() + 6);
+          const firstDayOfYear = new Date(d.getFullYear(), 0, 1);
+          const pastDaysOfYear = Math.round((d - firstDayOfYear) / 86400000);
+          const weekNum = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+          const formatDate = (date) => `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+          const wStr = weekNum.toString().padStart(2, '0');
+          return {
+            timeKey: `${d.getFullYear()}-W${wStr}`,
+            timeLabel: `W${wStr}`,
+            timeRange: `${formatDate(start)} - ${formatDate(end)}`,
+            timeSortKey: d.getTime()
+          };
+        } else {
+          // 月模式
+          const year = d.getFullYear();
+          const month = d.getMonth() + 1;
+          const mStr = month.toString().padStart(2, '0');
+          return {
+            timeKey: `${year}-M${mStr}`,
+            timeLabel: `${month}月`,
+            timeRange: `${year}年${month}月`,
+            timeSortKey: new Date(year, month - 1, 1).getTime()
+          };
+        }
       };
 
       const handleFileUpload = (e) => {
@@ -100,7 +120,6 @@
       };
 
       const parseCSV = (csvText) => {
-        // 增強型 CSV 解析器：正確處理雙引號內的逗號
         const parseCSVLine = (text) => {
           let result = []; let curVal = ''; let inQuotes = false;
           for (let i = 0; i < text.length; i++) {
@@ -130,53 +149,59 @@
           const qty = parseInt(cols[idxQty]);
           if (isNaN(qty)) return;
 
+          // 儲存原始資料，不先寫死時間區間
           result.push({
             brand: cols[idxBrand]?.replace(/"/g, '') || 'Unknown',
             style: cols[idxStyle]?.replace(/"/g, '') || 'Unknown',
             qty: qty,
-            ...getWeekInfo(dateStr) // <--- 解構後，會正確對應到 weekKey
+            dateStr: dateStr
           });
         });
-        setData(result);
+        setRawCsvData(result);
       };
 
-      // 將資料以「週次」分組
+      // 每次時間模式切換時，動態對原始資料加上時間標籤
+      const processedData = useMemo(() => {
+        return rawCsvData.map(d => ({
+          ...d,
+          ...getTimeInfo(d.dateStr, timeMode)
+        }));
+      }, [rawCsvData, timeMode]);
+
+      // 將資料以「週期」分組 (動態：週或月)
       const reportData = useMemo(() => {
-        if (data.length === 0) return { brands: [], weeks: [], chartData: [] };
+        if (processedData.length === 0) return { brands: [], periods: [], chartData: [] };
         
-        // 收集所有週次
-        const weekMap = {};
-        data.forEach(d => {
-          if (!weekMap[d.weekKey]) weekMap[d.weekKey] = { key: d.weekKey, label: d.weekLabel, range: d.weekRange, sortKey: d.weekSortKey };
+        const periodMap = {};
+        processedData.forEach(d => {
+          if (!periodMap[d.timeKey]) periodMap[d.timeKey] = { key: d.timeKey, label: d.timeLabel, range: d.timeRange, sortKey: d.timeSortKey };
         });
-        const sortedWeeks = Object.values(weekMap).sort((a, b) => a.sortKey - b.sortKey);
+        const sortedPeriods = Object.values(periodMap).sort((a, b) => a.sortKey - b.sortKey);
         
-        // 依照品牌與週次歸戶資料
         const brandsMap = {};
-        data.forEach(d => {
-          if (!brandsMap[d.brand]) brandsMap[d.brand] = { name: d.brand, total: 0, weekly: {}, styles: {} };
+        processedData.forEach(d => {
+          if (!brandsMap[d.brand]) brandsMap[d.brand] = { name: d.brand, total: 0, periodic: {}, styles: {} };
           const b = brandsMap[d.brand];
           b.total += d.qty; 
-          b.weekly[d.weekKey] = (b.weekly[d.weekKey] || 0) + d.qty;
+          b.periodic[d.timeKey] = (b.periodic[d.timeKey] || 0) + d.qty;
           
-          if (!b.styles[d.style]) b.styles[d.style] = { name: d.style, total: 0, weekly: {} };
+          if (!b.styles[d.style]) b.styles[d.style] = { name: d.style, total: 0, periodic: {} };
           const s = b.styles[d.style];
           s.total += d.qty; 
-          s.weekly[d.weekKey] = (s.weekly[d.weekKey] || 0) + d.qty;
+          s.periodic[d.timeKey] = (s.periodic[d.timeKey] || 0) + d.qty;
         });
 
-        // 長條圖資料
-        const chartData = sortedWeeks.map(w => ({
-          name: w.label, range: w.range,
-          qty: data.filter(d => d.weekKey === w.key).reduce((sum, d) => sum + d.qty, 0)
+        const chartData = sortedPeriods.map(p => ({
+          name: p.label, range: p.range,
+          qty: processedData.filter(d => d.timeKey === p.key).reduce((sum, d) => sum + d.qty, 0)
         }));
 
         return { 
           brands: Object.values(brandsMap).sort((a, b) => b.total - a.total), 
-          weeks: sortedWeeks, 
+          periods: sortedPeriods, 
           chartData 
         };
-      }, [data]);
+      }, [processedData]);
 
       const toggleBrand = (brandName) => {
         const newSet = new Set(expandedBrands);
@@ -194,30 +219,31 @@
       };
 
       const exportToCSV = () => {
-        if (!reportData || reportData.weeks.length === 0) return;
+        if (!reportData || reportData.periods.length === 0) return;
         let csvContent = '\uFEFF'; 
-        const headers = ['客戶 / 品牌', '工廠型體', ...reportData.weeks.map(w => `${w.label} (${w.range})`), '總計'];
+        const headers = ['客戶 / 品牌', '工廠型體', ...reportData.periods.map(p => `${p.label} (${p.range})`), '總計'];
         csvContent += headers.map(h => `"${h}"`).join(',') + '\n';
 
         reportData.brands.forEach(brand => {
           const brandRow = [`"${brand.name}"`, '"[品牌小計]"'];
-          reportData.weeks.forEach(w => brandRow.push(brand.weekly[w.key] || 0));
+          reportData.periods.forEach(p => brandRow.push(brand.periodic[p.key] || 0));
           brandRow.push(brand.total);
           csvContent += brandRow.join(',') + '\n';
 
           Object.values(brand.styles).forEach(style => {
             const styleRow = [`"${brand.name}"`, `"${style.name}"`];
-            reportData.weeks.forEach(w => styleRow.push(style.weekly[w.key] || 0));
+            reportData.periods.forEach(p => styleRow.push(style.periodic[p.key] || 0));
             styleRow.push(style.total);
             csvContent += styleRow.join(',') + '\n';
           });
         });
 
-        const footerRow = ['"每週預計出貨總數"', '""'];
-        reportData.weeks.forEach(w => {
-          footerRow.push(data.filter(d => d.weekKey === w.key).reduce((sum, d) => sum + d.qty, 0));
+        const modeText = timeMode === 'week' ? '每週' : '每月';
+        const footerRow = [`"${modeText}預計出貨總數"`, '""'];
+        reportData.periods.forEach(p => {
+          footerRow.push(processedData.filter(d => d.timeKey === p.key).reduce((sum, d) => sum + d.qty, 0));
         });
-        footerRow.push(data.reduce((sum, d) => sum + d.qty, 0));
+        footerRow.push(rawCsvData.reduce((sum, d) => sum + d.qty, 0));
         csvContent += footerRow.join(',') + '\n';
 
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -225,7 +251,7 @@
         const link = document.createElement('a'); link.href = url;
         const today = new Date();
         const dateStr = `${today.getFullYear()}${(today.getMonth()+1).toString().padStart(2,'0')}${today.getDate().toString().padStart(2,'0')}`;
-        link.setAttribute('download', `出貨每週集中度報表_${dateStr}.csv`);
+        link.setAttribute('download', `出貨${modeText}集中度報表_${dateStr}.csv`);
         document.body.appendChild(link); link.click(); document.body.removeChild(link);
       };
 
@@ -237,14 +263,30 @@
                 <Calendar className="w-7 h-7 text-indigo-600" /> 出貨與產能分析儀表板
               </h1>
               <p className="text-slate-500 mt-1 font-medium italic">
-                當前計算設定：{pairsPerHour}雙 × {lineCount}線 × {hoursPerDay}時 × {daysPerWeek}天 = {capacity.toLocaleString()} 雙/週
+                當前計算設定：{pairsPerHour}雙 × {lineCount}線 × {hoursPerDay}時 × {timeMode === 'week' ? daysPerWeek : daysPerMonth}天 = {capacity.toLocaleString()} 雙/{timeMode === 'week' ? '週' : '月'}
               </p>
             </div>
             
             <div className="flex flex-wrap items-center gap-3">
-              {data.length > 0 && (
+              {/* 模式切換按鈕 */}
+              <div className="flex bg-slate-200 p-1 rounded-xl shadow-inner mr-2">
+                <button 
+                  onClick={() => setTimeMode('week')}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${timeMode === 'week' ? 'bg-white text-indigo-600 shadow' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  按週檢視
+                </button>
+                <button 
+                  onClick={() => setTimeMode('month')}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${timeMode === 'month' ? 'bg-white text-indigo-600 shadow' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  按月檢視
+                </button>
+              </div>
+
+              {rawCsvData.length > 0 && (
                 <button onClick={exportToCSV} className="bg-white hover:bg-slate-50 text-indigo-600 border border-indigo-200 px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 font-bold shadow-sm">
-                  <Download className="w-4 h-4" /> 匯出每週報表
+                  <Download className="w-4 h-4" /> 匯出報表
                 </button>
               )}
               <label className="cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 shadow-lg shadow-indigo-200 font-bold">
@@ -254,13 +296,13 @@
             </div>
           </div>
 
-          {data.length === 0 ? (
+          {rawCsvData.length === 0 ? (
             <div className="max-w-xl mx-auto mt-20 p-16 bg-white rounded-3xl border border-slate-200 text-center shadow-xl shadow-slate-200/50">
               <div className="w-20 h-20 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Package className="w-10 h-10 text-indigo-500" />
               </div>
               <h3 className="text-xl font-bold mb-3 text-slate-800">準備開始分析</h3>
-              <p className="text-slate-500 leading-relaxed">請上傳訂單 CSV 檔案，系統將自動為您「以週為單位」整理出貨排程。</p>
+              <p className="text-slate-500 leading-relaxed">請上傳訂單 CSV 檔案，系統將為您自動整理出貨排程。</p>
             </div>
           ) : (
             <div className="max-w-[1600px] mx-auto space-y-6">
@@ -271,8 +313,8 @@
                     <Package className="w-5 h-5 text-indigo-400" />
                   </div>
                   <div>
-                    <div className="text-4xl font-black text-slate-800">{data.reduce((sum, d) => sum + d.qty, 0).toLocaleString()}</div>
-                    <div className="text-xs text-slate-400 mt-1">涵蓋 {reportData.weeks.length} 個週次</div>
+                    <div className="text-4xl font-black text-slate-800">{rawCsvData.reduce((sum, d) => sum + d.qty, 0).toLocaleString()}</div>
+                    <div className="text-xs text-slate-400 mt-1">涵蓋 {reportData.periods.length} 個{timeMode === 'week' ? '週次' : '月份'}</div>
                   </div>
                 </div>
 
@@ -280,13 +322,13 @@
                    <div className="flex items-center justify-between mb-4">
                      <div className="flex items-center gap-2 text-rose-600">
                        <Settings2 className="w-4 h-4" />
-                       <h3 className="text-sm font-bold uppercase tracking-wider">調整總產能上限</h3>
+                       <h3 className="text-sm font-bold uppercase tracking-wider">調整總產能上限 ({timeMode === 'week' ? '週' : '月'})</h3>
                      </div>
                      <div className="flex items-center gap-4">
-                       <input type="range" min="5000" max="150000" step="100" value={capacity} onChange={(e) => handleCapacityChange(parseInt(e.target.value))} className="w-48 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-rose-500" />
+                       <input type="range" min="5000" max={timeMode === 'week' ? 200000 : 800000} step="1000" value={capacity} onChange={(e) => handleCapacityChange(parseInt(e.target.value))} className="w-48 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-rose-500" />
                        <div className="flex items-center bg-rose-50 border border-rose-200 rounded-lg px-3 py-1">
                          <input type="number" value={capacity} onChange={(e) => handleCapacityChange(parseInt(e.target.value) || 0)} className="w-24 bg-transparent text-right font-black text-rose-600 focus:outline-none" />
-                         <span className="ml-1 text-xs font-bold text-rose-400">雙/週</span>
+                         <span className="ml-1 text-xs font-bold text-rose-400">雙/{timeMode === 'week' ? '週' : '月'}</span>
                        </div>
                      </div>
                    </div>
@@ -304,9 +346,9 @@
                               return (
                                 <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-700 text-xs">
                                   <p className="font-bold mb-1">{payload[0].payload.name} ({payload[0].payload.range})</p>
-                                  <p className="flex justify-between gap-4 mb-1">每週訂單: <span className={isOver ? 'text-rose-400' : 'text-emerald-400'}>{val.toLocaleString()} 雙</span></p>
+                                  <p className="flex justify-between gap-4 mb-1">當期訂單: <span className={isOver ? 'text-rose-400' : 'text-emerald-400'}>{val.toLocaleString()} 雙</span></p>
                                   <p className="flex justify-between gap-4 text-slate-400">當前產能: <span>{capacity.toLocaleString()} 雙</span></p>
-                                  {isOver && <p className="mt-2 text-[10px] bg-rose-500/20 text-rose-300 p-1 rounded border border-rose-500/30 text-center">超出每週能力範圍</p>}
+                                  {isOver && <p className="mt-2 text-[10px] bg-rose-500/20 text-rose-300 p-1 rounded border border-rose-500/30 text-center">超出能力範圍</p>}
                                 </div>
                               );
                             }
@@ -327,7 +369,7 @@
                 <div className="p-6 border-b border-slate-50 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="p-2 bg-slate-100 rounded-lg"><TrendingUp className="w-5 h-5 text-slate-600" /></div>
-                    <h2 className="font-bold text-lg text-slate-800">出貨週排程熱圖 (超標預警)</h2>
+                    <h2 className="font-bold text-lg text-slate-800">出貨排程熱圖 (超標預警)</h2>
                   </div>
                   <div className="flex gap-4 items-center text-xs text-slate-400 font-medium">
                     <span className="flex items-center gap-1"><div className="w-3 h-3 bg-rose-500 rounded-sm"></div> 超產能</span>
@@ -340,11 +382,11 @@
                     <thead>
                       <tr className="bg-slate-50/80">
                         <th className="p-4 font-bold text-slate-500 border-b border-slate-100 sticky left-0 bg-slate-50 z-20 w-64">客戶品牌 / 工廠型體</th>
-                        {/* 這裡就是每週分佈的欄位 */}
-                        {reportData.weeks.map(w => (
-                          <th key={w.key} className="p-4 border-b border-slate-100 text-center min-w-[140px]">
-                            <div className="text-slate-800 font-bold">{w.label}</div>
-                            <div className="text-[10px] text-slate-400 font-medium">{w.range}</div>
+                        {/* 動態渲染週或月的欄位 */}
+                        {reportData.periods.map(p => (
+                          <th key={p.key} className="p-4 border-b border-slate-100 text-center min-w-[140px]">
+                            <div className="text-slate-800 font-bold">{p.label}</div>
+                            <div className="text-[10px] text-slate-400 font-medium">{p.range}</div>
                           </th>
                         ))}
                         <th className="p-4 font-bold text-slate-500 border-b border-slate-100 text-right sticky right-0 bg-slate-50 z-20">總計</th>
@@ -360,10 +402,10 @@
                                 {isExpanded ? <ChevronDown className="w-4 h-4 text-indigo-500" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
                                 <span className="font-bold text-slate-700">{brand.name}</span>
                               </td>
-                              {reportData.weeks.map(w => {
-                                const val = brand.weekly[w.key] || 0;
+                              {reportData.periods.map(p => {
+                                const val = brand.periodic[p.key] || 0;
                                 return (
-                                  <td key={w.key} className="p-2 border-b border-slate-50 text-center">
+                                  <td key={p.key} className="p-2 border-b border-slate-50 text-center">
                                     {val > 0 && <div className={`py-2 px-1 rounded-lg text-[13px] transition-all shadow-sm ${getHeatColor(val)}`}>{val.toLocaleString()}</div>}
                                   </td>
                                 );
@@ -373,8 +415,8 @@
                             {isExpanded && Object.values(brand.styles).map((style) => (
                               <tr key={style.name} className="bg-slate-50/30 text-xs">
                                 <td className="p-4 border-b border-slate-50 pl-10 sticky left-0 bg-slate-50/80 z-10 text-slate-500 italic">{style.name}</td>
-                                {reportData.weeks.map(w => (
-                                  <td key={w.key} className="p-2 border-b border-slate-50 text-center opacity-70 italic text-slate-400">{style.weekly[w.key] ? style.weekly[w.key].toLocaleString() : '-'}</td>
+                                {reportData.periods.map(p => (
+                                  <td key={p.key} className="p-2 border-b border-slate-50 text-center opacity-70 italic text-slate-400">{style.periodic[p.key] ? style.periodic[p.key].toLocaleString() : '-'}</td>
                                 ))}
                                 <td className="p-4 border-b border-slate-50 text-right text-slate-400 sticky right-0 bg-slate-50/80 z-10 italic">{style.total.toLocaleString()}</td>
                               </tr>
@@ -385,17 +427,17 @@
                     </tbody>
                     <tfoot className="bg-slate-900 text-white">
                       <tr>
-                        <td className="p-4 font-bold text-center">每週預計出貨總數</td>
-                        {reportData.weeks.map(w => {
-                          const total = data.filter(d => d.weekKey === w.key).reduce((sum, d) => sum + d.qty, 0);
+                        <td className="p-4 font-bold text-center">{timeMode === 'week' ? '每週' : '每月'}預計出貨總數</td>
+                        {reportData.periods.map(p => {
+                          const total = processedData.filter(d => d.timeKey === p.key).reduce((sum, d) => sum + d.qty, 0);
                           const isOver = total > capacity;
                           return (
-                            <td key={w.key} className={`p-4 text-center font-black ${isOver ? 'text-rose-400 animate-pulse' : 'text-amber-400'}`}>
+                            <td key={p.key} className={`p-4 text-center font-black ${isOver ? 'text-rose-400 animate-pulse' : 'text-amber-400'}`}>
                               {total.toLocaleString()} {isOver && <div className="text-[10px] uppercase">Over!</div>}
                             </td>
                           );
                         })}
-                        <td className="p-4 text-right font-black text-emerald-400 sticky right-0 bg-slate-900">{data.reduce((sum, d) => sum + d.qty, 0).toLocaleString()}</td>
+                        <td className="p-4 text-right font-black text-emerald-400 sticky right-0 bg-slate-900">{rawCsvData.reduce((sum, d) => sum + d.qty, 0).toLocaleString()}</td>
                       </tr>
                     </tfoot>
                   </table>
@@ -420,19 +462,28 @@
                       <div className="text-[10px] text-slate-400 font-bold uppercase mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> 日工時 (小時)</div>
                       <input type="number" value={hoursPerDay} onChange={(e) => setHoursPerDay(parseInt(e.target.value) || 0)} className="w-full text-xl font-black text-indigo-600 focus:outline-none" />
                     </div>
-                    <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm">
-                      <div className="text-[10px] text-slate-400 font-bold uppercase mb-1 flex items-center gap-1"><CalendarDays className="w-3 h-3" /> 週工時 (天)</div>
-                      <input type="number" value={daysPerWeek} onChange={(e) => setDaysPerWeek(parseInt(e.target.value) || 0)} className="w-full text-xl font-black text-indigo-600 focus:outline-none" />
-                    </div>
+                    
+                    {/* 動態顯示週工時或月工時 */}
+                    {timeMode === 'week' ? (
+                      <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm">
+                        <div className="text-[10px] text-slate-400 font-bold uppercase mb-1 flex items-center gap-1"><CalendarDays className="w-3 h-3" /> 週工時 (天)</div>
+                        <input type="number" value={daysPerWeek} onChange={(e) => setDaysPerWeek(parseInt(e.target.value) || 0)} className="w-full text-xl font-black text-indigo-600 focus:outline-none" />
+                      </div>
+                    ) : (
+                      <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm">
+                        <div className="text-[10px] text-slate-400 font-bold uppercase mb-1 flex items-center gap-1"><CalendarDays className="w-3 h-3" /> 月工時 (天)</div>
+                        <input type="number" value={daysPerMonth} onChange={(e) => setDaysPerMonth(parseInt(e.target.value) || 0)} className="w-full text-xl font-black text-indigo-600 focus:outline-none" />
+                      </div>
+                    )}
                   </div>
                   <p className="mt-4 text-xs text-indigo-400 font-medium italic">* 這裡的數字與上方總產能水平線同步，任何一處修改都會即時連動。</p>
                 </div>
                 <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl">
                   <div className="flex items-center gap-2 mb-3 text-rose-900 font-bold"><AlertTriangle className="w-5 h-5" /> 分析與對策</div>
                   <ul className="text-sm text-rose-800 space-y-3 opacity-90 leading-relaxed">
-                    <li className="flex gap-2"><span className="font-bold">•</span><span>當「每週」出貨量大於產能時，底部會顯示 <b className="text-rose-600">Over!</b>，請評估是否需調整該週工時或加班。</span></li>
-                    <li className="flex gap-2"><span className="font-bold">•</span><span>透過修改「單線效能」，可以模擬當產線熟練度提高或技術改進後的每週排產狀況。</span></li>
-                    <li className="flex gap-2"><span className="font-bold">•</span><span><b className="text-rose-600">匯出每週報表：</b> 可將此整理好的每週排程明細匯出為 Excel 支援的 CSV 檔，方便與各單位協調溝通。</span></li>
+                    <li className="flex gap-2"><span className="font-bold">•</span><span>當「當期」出貨量大於產能時，底部會顯示 <b className="text-rose-600">Over!</b>，請評估是否需調整工時或加班。</span></li>
+                    <li className="flex gap-2"><span className="font-bold">•</span><span>上方可以隨時切換 **「按週檢視」** 或是 **「按月檢視」**，產能標準與圖表會自動為您重新計算歸類。</span></li>
+                    <li className="flex gap-2"><span className="font-bold">•</span><span><b className="text-rose-600">匯出報表：</b> 將跟隨您當下的檢視模式（按週或按月），直接匯出給工廠或高層看的排程明細 CSV。</span></li>
                   </ul>
                 </div>
               </div>
